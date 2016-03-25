@@ -88,8 +88,18 @@ static void cpx2pixels(png_byte *res, const float *fbuf, size_t n) {
         val2rgb2( (fbuf[i] - minval)/valrange , res+(i*3) );
 }
 
+// not efficient enough, but this is not the bottle neck
+static int is_sound_quiet(float *magbuf, int count, float threshold) {
+  float valrange = maxval - minval;
+  double total = 0;
+  for (int i = 0; i < count; ++i) {
+    total += magbuf[i];
+  }
+  return ((total / count) - minval)/valrange <= threshold;
+}
 
-int write_image(const char *filename, int width, int height, float *buffer, char* title) {
+
+int write_image(const char *filename, int width, int height, int nrows, float *buffer, char* title, float mag_to_ignore_threshold) {
   int code = 0;
   FILE *fp = NULL;
   png_structp png_ptr = NULL;
@@ -150,7 +160,11 @@ int write_image(const char *filename, int width, int height, float *buffer, char
   float valrange = maxval - minval;
 
   // Write image data
-  for (int i = 0; i < height; ++i) {
+  for (int i = 0; i < nrows; ++i) {
+    if (is_sound_quiet(&buffer[i * width], width, mag_to_ignore_threshold)) {
+      continue;
+    }
+
     for (int j = 0; j < width; ++j) {
       val2rgb2((buffer[i * width + j] - minval)/valrange , row+(j*3) );
     }
@@ -169,19 +183,26 @@ int write_image(const char *filename, int width, int height, float *buffer, char
   return code;
 }
 
-static void write_magnitudes_to_file(
+static int write_magnitudes_to_file(
     const char *outfile, 
     float *magbuf,
     int nfreqs, 
     int nrows,
-    int feature_flag
+    int feature_flag,
+    float mag_to_ignore_threshold
     ) {
 
   FILE *file = fopen(outfile, "wb");
 
   float valrange = maxval - minval;
 
+  int lines_ignored = 0;
   for (int i = 0; i < nrows; ++i) {
+    if (is_sound_quiet(&magbuf[i * nfreqs], nfreqs, mag_to_ignore_threshold)) {
+      ++lines_ignored;
+      continue;
+    }
+
     fprintf(file, "%d,", feature_flag);
 
     for (int j = 0; j < nfreqs; ++j) {
@@ -195,6 +216,8 @@ static void write_magnitudes_to_file(
   }
 
   fclose(file);
+
+  return lines_ignored;
 }
 
 static void do_fft(
@@ -283,8 +306,10 @@ static void do_fft(
     }
   }
 
-  write_magnitudes_to_file(out_magnitude_file, img_data, restricted_nfreqs, nrows, feature_flag);
-  write_image(out_image_file, restricted_nfreqs, nrows, img_data, NULL);
+  float mag_to_ignore_threshold = 0.0f;
+  int lines_ignored = write_magnitudes_to_file(out_magnitude_file, img_data, restricted_nfreqs, nrows, feature_flag, mag_to_ignore_threshold);
+  printf("%d, %d\n", lines_ignored, nrows);
+  write_image(out_image_file, restricted_nfreqs, nrows - lines_ignored, nrows, img_data, NULL, mag_to_ignore_threshold);
 
   free(fft_input);
   free(fft_output);
