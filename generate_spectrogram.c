@@ -67,35 +67,15 @@ static void val2rgb3(float level, png_byte *rgb) {
     rgb[2] = (b * cf + 0.5);
 }
 
-static void cpx2pixels(png_byte *res, const float *fbuf, size_t n) {
-    size_t i;
-    float minval,maxval,valrange;
-    minval=maxval=fbuf[0];
-
-    for (i = 0; i < n; ++i) {
-        if (fbuf[i] > maxval) maxval = fbuf[i];
-        if (fbuf[i] < minval) minval = fbuf[i];
-    }
-
-    fprintf(stderr,"min ==%f,max=%f\n",minval,maxval);
-    valrange = maxval-minval;
-    if (valrange == 0) {
-        fprintf(stderr,"min == max == %f\n",minval);
-        exit (1);
-    }
-
-    for (i = 0; i < n; ++i)
-        val2rgb2( (fbuf[i] - minval)/valrange , res+(i*3) );
-}
-
 // not efficient enough, but this is not the bottle neck
-static int is_sound_quiet(float *magbuf, int count, float threshold) {
-  float valrange = maxval - minval;
-  double total = 0;
+static int is_loudest_sound_too_low(float *magbuf, int count, float threshold) {
+  float current_max = 0;
   for (int i = 0; i < count; ++i) {
-    total += magbuf[i];
+    current_max = fmax(current_max, magbuf[i]);
   }
-  return ((total / count) - minval)/valrange <= threshold;
+
+  float valrange = maxval - minval;
+  return ((current_max - minval)/valrange) <= threshold;
 }
 
 
@@ -161,7 +141,7 @@ int write_image(const char *filename, int width, int height, int nrows, float *b
 
   // Write image data
   for (int i = 0; i < nrows; ++i) {
-    if (is_sound_quiet(&buffer[i * width], width, mag_to_ignore_threshold)) {
+    if (is_loudest_sound_too_low(&buffer[i * width], width, mag_to_ignore_threshold)) {
       continue;
     }
 
@@ -196,10 +176,10 @@ static int write_magnitudes_to_file(
 
   float valrange = maxval - minval;
 
-  int lines_ignored = 0;
+  int rows_ignored = 0;
   for (int i = 0; i < nrows; ++i) {
-    if (is_sound_quiet(&magbuf[i * nfreqs], nfreqs, mag_to_ignore_threshold)) {
-      ++lines_ignored;
+    if (is_loudest_sound_too_low(&magbuf[i * nfreqs], nfreqs, mag_to_ignore_threshold)) {
+      ++rows_ignored;
       continue;
     }
 
@@ -217,7 +197,7 @@ static int write_magnitudes_to_file(
 
   fclose(file);
 
-  return lines_ignored;
+  return rows_ignored;
 }
 
 static void do_fft(
@@ -229,7 +209,7 @@ static void do_fft(
     int sample_rate,
     int stereo,
     int round_to_avg,
-    int feature_flag // 1 or 0, being printed to the FFT data file
+    int feature_flag // a number, being printed to the FFT data file
     ) {
 
   int nfft = sample_rate / herz_per_bin;
@@ -307,10 +287,183 @@ static void do_fft(
   }
 
   float mag_to_ignore_threshold = 0.0f;
-  int lines_ignored = write_magnitudes_to_file(out_magnitude_file, img_data, restricted_nfreqs, nrows, feature_flag, mag_to_ignore_threshold);
-  printf("%d, %d\n", lines_ignored, nrows);
-  write_image(out_image_file, restricted_nfreqs, nrows - lines_ignored, nrows, img_data, NULL, mag_to_ignore_threshold);
+  int rows_ignored = write_magnitudes_to_file(out_magnitude_file, img_data, restricted_nfreqs, nrows, feature_flag, mag_to_ignore_threshold);
+  fprintf(stderr, "lines ignored: %d\n", rows_ignored);
+  write_image(out_image_file, restricted_nfreqs, nrows - rows_ignored, nrows, img_data, NULL, mag_to_ignore_threshold);
 
+  free(fft_input);
+  free(fft_output);
+  free(inbuf);
+  free(magbuf);
+  free(img_data);
+  fclose(file);
+}
+
+// len = height of image
+int write_image2(const char *filename, int width, float *buffer, int len) {
+  int code = 0;
+  FILE *fp = NULL;
+  png_structp png_ptr = NULL;
+  png_infop info_ptr = NULL;
+  png_bytep row = NULL;
+  
+  // Open file for writing (binary mode)
+  fp = fopen(filename, "wb");
+  if (fp == NULL) {
+    fprintf(stderr, "Could not open file %s for writing\n", filename);
+    code = 1;
+    goto finalise;
+  }
+
+  // Initialize write structure
+  png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+  if (png_ptr == NULL) {
+    fprintf(stderr, "Could not allocate write struct\n");
+    code = 1;
+    goto finalise;
+  }
+
+  // Initialize info structure
+  info_ptr = png_create_info_struct(png_ptr);
+  if (info_ptr == NULL) {
+    fprintf(stderr, "Could not allocate info struct\n");
+    code = 1;
+    goto finalise;
+  }
+
+  // Setup Exception handling
+  if (setjmp(png_jmpbuf(png_ptr))) {
+    fprintf(stderr, "Error during png creation\n");
+    code = 1;
+    goto finalise;
+  }
+
+  png_init_io(png_ptr, fp);
+
+  // Write header (8 bit colour depth)
+  png_set_IHDR(png_ptr, info_ptr, width, len,
+      8, PNG_COLOR_TYPE_RGB, PNG_INTERLACE_NONE,
+      PNG_COMPRESSION_TYPE_BASE, PNG_FILTER_TYPE_BASE);
+
+  png_write_info(png_ptr, info_ptr);
+
+  // Allocate memory for one row (3 bytes per pixel - RGB)
+  row = (png_bytep) malloc(3 * width * sizeof(png_byte));
+  float valrange = maxval - minval;
+
+  for (int i = 0; i < len; ++i) {
+    memset(row, 0, 3 * width * sizeof(png_byte));
+
+    float f = buffer[i];
+    /*printf("data: %f\n", f);*/
+    int index = (int)f;
+    if (index == 500) --index;
+    row[index*3] = 0x00;
+    row[index*3+1] = 0xff;
+    row[index*3+2] = 0x00;
+
+    png_write_row(png_ptr, row);
+  }
+
+  // End write
+  png_write_end(png_ptr, NULL);
+
+  finalise:
+  if (fp != NULL) fclose(fp);
+  if (info_ptr != NULL) png_free_data(png_ptr, info_ptr, PNG_FREE_ALL, -1);
+  if (png_ptr != NULL) png_destroy_write_struct(&png_ptr, (png_infopp)NULL);
+  if (row != NULL) free(row);
+
+  return code;
+}
+
+static void do_ffti(
+    const char *audio_file_path, 
+    const char *out_image_file,
+    const char *out_magnitude_file,
+    int herz_per_bin, 
+    int reserved_freq_bin,
+    int sample_rate,
+    int stereo,
+    int round_to_avg,
+    int feature_flag // a number, being printed to the FFT data file
+    ) {
+
+  int nfft = sample_rate / herz_per_bin;
+  int nfreqs = nfft/2 + 1;
+
+  kiss_fftr_cfg cfg = kiss_fftr_alloc(nfft, 0, 0, 0);
+  kiss_fftr_cfg cfgi = kiss_fftr_alloc(nfft, 1, 0, 0);
+  kiss_fft_scalar *fft_input = (kiss_fft_scalar *)malloc(sizeof(kiss_fft_scalar) * nfft);
+  kiss_fft_cpx *fft_output = (kiss_fft_cpx *)malloc(sizeof(kiss_fft_cpx) * nfreqs);
+  kiss_fft_scalar *fft_re = (kiss_fft_scalar *)malloc(sizeof(kiss_fft_scalar) * nfft);
+  short *inbuf = (short *)malloc(sizeof(short) * nfft * 2); // for stereo
+  float *magbuf = (float *)malloc(sizeof(float) * nfreqs);
+  memset(magbuf, 0, sizeof(magbuf[0]) * nfreqs);
+
+  FILE *file = fopen(audio_file_path, "rb");
+
+  int round_ctr = 0;
+
+  float *img_data = NULL;
+  int nrows = 0;
+
+  const float max_height = 500.0f;
+  int img_count = 0;
+
+  while (1) {
+    if (stereo) {
+      int n = fread(inbuf, sizeof(short) * 2, nfft, file);
+      if (n != nfft) {
+        break;
+      }
+
+      for (int i = 0; i < nfft; ++i) {
+        fft_input[i] = inbuf[i * 2] + inbuf[i * 2 + 1];
+      }
+    } else {
+      int n = fread(inbuf, sizeof(short), nfft, file);
+      if (n != nfft) {
+        break;
+      }
+
+      for (int i = 0; i < nfft; ++i) {
+        fft_input[i] = inbuf[i];
+      }
+    }
+
+    kiss_fftr(cfg, fft_input, fft_output);
+
+    int start_index = 700 / herz_per_bin + 1;
+
+    for (int i = start_index; i < nfreqs; ++i) {
+      fft_output[i].r = 0;
+      fft_output[i].i = 0;
+    }
+
+    kiss_fftri(cfgi, fft_output, fft_re);
+
+    float nmax = 0;
+    float nmin = 0;
+    for (int i = 0; i < nfft; ++i) {
+      nmax = fmax(nmax, fft_re[i]);
+      nmin= fmin(nmin, fft_re[i]);
+    }
+    float nrange = nmax - nmin;
+    for (int i = 0; i < nfft; ++i) {
+      fft_re[i] = (fft_re[i] - nmin) / nrange * max_height;
+    }
+
+    char *filename = (char *)malloc(PATH_MAX);
+    sprintf(filename, "%s_%d.png", out_image_file, (++img_count));
+    printf("generating: %fx%d\n", max_height, nfft);
+    write_image2(filename, max_height, fft_re, nfft);
+    free(filename);
+  }
+
+
+  free(cfg);
+  free(cfgi);
   free(fft_input);
   free(fft_output);
   free(inbuf);
@@ -394,7 +547,8 @@ static void process_args(int argc, char **argv) {
 
 int main(int argc, const char *argv[]) {
   process_args(argc, (char **)argv);
-  do_fft(pcm_file, specgrm_file, fft_data_file, herz_per_bin, bins_to_reserve, sample_rate, is_stereo, round_to_avg, feature_flag);
+  /*do_fft(pcm_file, specgrm_file, fft_data_file, herz_per_bin, bins_to_reserve, sample_rate, is_stereo, round_to_avg, feature_flag);*/
+  do_ffti(pcm_file, specgrm_file, fft_data_file, herz_per_bin, bins_to_reserve, sample_rate, is_stereo, round_to_avg, feature_flag);
 
   /*do_fft("/Users/neevek/Desktop/guitarsound/do-2-cut.raw", 5, 200, "out/1.png", "out/1.txt");*/
 
