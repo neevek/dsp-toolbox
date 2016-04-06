@@ -217,13 +217,17 @@ static void do_fft(
   int restricted_nfreqs = fmin(nfreqs, reserved_freq_bin);
 
   kiss_fftr_cfg cfg = kiss_fftr_alloc(nfft, 0, 0, 0);
+  kiss_fftr_cfg cfgi = kiss_fftr_alloc(nfft, 1, 0, 0);
   kiss_fft_scalar *fft_input = (kiss_fft_scalar *)malloc(sizeof(kiss_fft_scalar) * nfft);
   kiss_fft_cpx *fft_output = (kiss_fft_cpx *)malloc(sizeof(kiss_fft_cpx) * nfreqs);
+  kiss_fft_scalar *fft_re = (kiss_fft_scalar *)malloc(sizeof(kiss_fft_scalar) * nfft);
   short *inbuf = (short *)malloc(sizeof(short) * nfft * 2); // for stereo
   float *magbuf = (float *)malloc(sizeof(float) * restricted_nfreqs);
   memset(magbuf, 0, sizeof(magbuf[0]) * restricted_nfreqs);
 
   FILE *file = fopen(audio_file_path, "rb");
+
+  FILE *file_re = fopen("reconstructed.raw", "wb");
 
   int round_ctr = 0;
 
@@ -260,9 +264,18 @@ static void do_fft(
 
     kiss_fftr(cfg, fft_input, fft_output);
 
+
     for (int i = 0; i < restricted_nfreqs; ++i) {
       magbuf[i] += fft_output[i].r * fft_output[i].r + fft_output[i].i * fft_output[i].i;
     }
+
+    kiss_fftri(cfgi, fft_output, fft_re);
+
+    for (int i = 0; i < nfft; ++i) {
+      inbuf[i] = fft_re[i] / nfft;
+    }
+
+    fwrite(inbuf, sizeof(short), nfft, file_re);
 
     if (++round_ctr == round_to_avg) {
       round_ctr = 0;
@@ -291,12 +304,15 @@ static void do_fft(
   fprintf(stderr, "lines ignored: %d\n", rows_ignored);
   write_image(out_image_file, restricted_nfreqs, nrows - rows_ignored, nrows, img_data, NULL, mag_to_ignore_threshold);
 
+  free(cfg);
+  free(cfgi);
   free(fft_input);
   free(fft_output);
   free(inbuf);
   free(magbuf);
   free(img_data);
   fclose(file);
+  fclose(file_re);
 }
 
 // len = height of image
@@ -547,8 +563,8 @@ static void process_args(int argc, char **argv) {
 
 int main(int argc, const char *argv[]) {
   process_args(argc, (char **)argv);
-  /*do_fft(pcm_file, specgrm_file, fft_data_file, herz_per_bin, bins_to_reserve, sample_rate, is_stereo, round_to_avg, feature_flag);*/
-  do_ffti(pcm_file, specgrm_file, fft_data_file, herz_per_bin, bins_to_reserve, sample_rate, is_stereo, round_to_avg, feature_flag);
+  do_fft(pcm_file, specgrm_file, fft_data_file, herz_per_bin, bins_to_reserve, sample_rate, is_stereo, round_to_avg, feature_flag);
+  /*do_ffti(pcm_file, specgrm_file, fft_data_file, herz_per_bin, bins_to_reserve, sample_rate, is_stereo, round_to_avg, feature_flag);*/
 
   /*do_fft("/Users/neevek/Desktop/guitarsound/do-2-cut.raw", 5, 200, "out/1.png", "out/1.txt");*/
 
