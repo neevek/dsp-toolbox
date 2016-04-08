@@ -1,3 +1,5 @@
 *.raw
 *.mp3
 *.png
+input/
+output/
