@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
 #include <string>
 #include <png.h>
 #include "ConstantQTransform.hxx"
@@ -90,39 +92,50 @@ static void val2rgb2(float level, png_byte *rgb) {
 
 // http://en.wikipedia.org/wiki/Window_function
 float hamming_window(int n, int N) {
-  return 0.53836f - 0.46f * (float)cos((2 * M_PI * n) / (N - 1));
+  return 0.54f - 0.46f * (float)cos((2 * M_PI * n) / (N - 1));
 }
 
-static void do_cqt(const char *raw_pcm_file,
+static void do_cqt(const char *raw_pcm_filepath,
                    const char *cqt_spectrogram_filepath,
                    const char *cqt_data_filepath,
+                   unsigned int sample_rate,
+                   float overlap,
+                   double min_freq,
+                   double max_freq,
+                   unsigned int bins_per_octave,
+                   bool is_stereo,
+                   int use_channels,  // 0=both, 1=left, 2=right
                    const char *feature) {
-  bool is_stereo = true;
 
-  unsigned int sample_rate = 16000;
-  double min_freq = 61.735f;
-  double max_freq = 4186.0f;
-  unsigned int bins_per_octave = 12;
+  printf("\n");
+  printf("================== debug info ==================\n");
+  printf(" pcm input file: %s\n", raw_pcm_filepath);
+  printf("cqt spectr file: %s\n", cqt_spectrogram_filepath);
+  printf("  cqt data file: %s\n", cqt_data_filepath);
+  printf("    sample rate: %d\n", sample_rate);
+  printf("        overlap: %.4f\n", overlap);
+  printf("  min frequency: %.4lf\n", min_freq);
+  printf("  max frequency: %.4lf\n", max_freq);
+  printf("bins per octave: %d\n", bins_per_octave);
+  printf("      is stereo: %d\n", is_stereo);
+  printf("   use channels: %d (0=both, 1=left, 2=right)\n", use_channels);
+  printf("        feature: %s\n", feature);
 
   double sparse_cqt_kernel_threshold = 0.0054;
-  
 
   Simac::ConstantQTransform cqt(sample_rate, min_freq, max_freq, bins_per_octave);
   unsigned int frame_size = cqt.getfftlength();
-  printf("initializing fft...\n");
   FourierTransform fft(frame_size, 1, 0);
-  printf("initializing cqt...\n");
   cqt.sparsekernel(sparse_cqt_kernel_threshold);
 
-  printf("frame_size=%d\n", frame_size);
+  printf("        octaves: %d\n", cqt.getOctaves());
+  printf("  est. min freq: %.4lf\n", cqt.getEstimatedMinFreq());
 
-  FILE *file = fopen(raw_pcm_file, "rb");
+  FILE *file = fopen(raw_pcm_filepath, "rb");
   short inbuf[frame_size * 2];
   double frame_data[frame_size];
 
   std::vector<std::vector<double>> cqt_data;
-
-  printf("doing fft & cqt\n");
   while(1) {
     if (is_stereo) {
       int n = fread(inbuf, sizeof(short) * 2, frame_size, file);
@@ -133,17 +146,25 @@ static void do_cqt(const char *raw_pcm_file,
       for (int i = 0; i < frame_size; ++i) {
         //frame_data[i] = inbuf[i * 2] + inbuf[i * 2 + 1];
         // use right channel only in this case
-        printf("i=%d, hamming: %f\n", i, hamming_window(i, frame_size));
-        frame_data[i] = inbuf[i * 2 + 1] * hamming_window(i, frame_size);
+        //printf("i=%d, hamming: %f\n", i, hamming_window(i, frame_size));
+
+        float hamming = hamming_window(i, frame_size);
+        if (use_channels == 1) {
+          frame_data[i] = inbuf[i * 2] * hamming;
+        } else if (use_channels == 2) {
+          frame_data[i] = inbuf[i * 2 + 1] * hamming;
+        } else {
+          frame_data[i] = (inbuf[i * 2] + inbuf[i * 2 + 1]) * hamming;
+        }
       }
 
-      long overlap_size = (long)(frame_size * sizeof(short) * 2 * 0.5f);
+      long overlap_size = (long)(frame_size * sizeof(short) * 2 * overlap);
       if (overlap_size % 2 != 0) {
         --overlap_size;
       }
       fseek(file, -overlap_size, SEEK_CUR);
       //fseek(file, ftell(file)-overlap_size, SEEK_SET);
-      printf("overlap=%ld, frame_size=%d, cur_pos=%ld\n", overlap_size, frame_size, ftell(file));
+      //printf("overlap=%ld, frame_size=%d, cur_pos=%ld\n", overlap_size, frame_size, ftell(file));
     } else {
       int n = fread(inbuf, sizeof(short), frame_size, file);
       if (n != frame_size) {
@@ -169,17 +190,10 @@ static void do_cqt(const char *raw_pcm_file,
     col.resize(col.size()/2);
 
     cqt_data.push_back(col);
-
-    //printf("================================================\n");
-    //for (int i = 0; i < spectrum.size(); ++i) {
-      //printf("%lf\n", spectrum[i]);
-    //}
   }
 
   if (cqt_data.size() > 0) {
     FILE *fdata = fopen(cqt_data_filepath, "wb");
-
-    printf("plotting cqt spectrogram\n");
 
     int width = cqt_data[0].size();
     int height = cqt_data.size();
@@ -218,56 +232,120 @@ static void do_cqt(const char *raw_pcm_file,
     delete [] row;
     fclose(fdata);
 
-    printf("    image size: %dx%d\n", width, height);
+    printf("     image size: %dx%d\n", width, height);
   }
 
   fclose(file);
 
-  printf("          input: %s\n", raw_pcm_file);
-  printf("cqt spectrogram: %s\n", cqt_spectrogram_filepath);
-  printf("       cqt data: %s\n", cqt_data_filepath);
+  printf("\n");
+}
+
+static char *raw_pcm_filepath = nullptr;
+static char *cqt_spectrogram_filepath = nullptr;
+static char *cqt_data_filepath = nullptr;
+static bool is_stereo = false;
+static int use_channels = 0; // 0=both, 1=left, 2=right
+static unsigned int sample_rate = 0;
+static float overlap = 0.5f;
+static double min_freq = 246.94f; //61.735f;
+static double max_freq = 4186.0f;
+static unsigned int bins_per_octave = 36;
+static char *feature = nullptr;
+
+static void usage() {
+  fprintf(stderr, "\nUsage:\n"
+      "\t-i path to the raw PCM file\n"
+      "\t-p path to output spectrogram image file\n"
+      "\t-d path to cqt data text file\n"
+      "\t-c is the raw PCM file stereo\n"
+      "\t-u use which channels, default=%d (0=both, 1=left, 2=right)\n"
+      "\t-s sample rate of the raw PCM file, default=%d\n"
+      "\t-o overlap, default=%.4f\n"
+      "\t-m min frequency, default=%.4lf\n"
+      "\t-n max frequency, default=%.4lf\n"
+      "\t-b bins per octave, default=%d\n"
+      "\t-f feature flag\n"
+      "\t-h print this help\n\n",
+      use_channels,
+      sample_rate,
+      overlap,
+      min_freq,
+      max_freq,
+      bins_per_octave
+      );
+}
+
+static void log_and_exit(const char *msg) {
+  fprintf(stderr, "%s", msg);
+  usage();
+  exit(1);
+}
+
+static void process_args(int argc, char **argv) {
+  while (1) {
+    int c = getopt(argc, argv, "i:p:d:c:u:s:o:m:n:b:f:h");
+    if (c == -1) {
+      break;
+    }
+
+    switch(c) {
+      case 'i': raw_pcm_filepath = optarg; break;
+      case 'p': cqt_spectrogram_filepath = optarg; break;
+      case 'd': cqt_data_filepath = optarg; break;
+      case 'c': is_stereo = (int)atoi(optarg); break;
+      case 'u': use_channels = (int)atoi(optarg); break;
+      case 's': sample_rate = (unsigned int)atoi(optarg); break;
+      case 'o': overlap = (float )atof(optarg); break;
+      case 'm': min_freq = (double)atof(optarg); break;
+      case 'n': max_freq = (double)atof(optarg); break;
+      case 'b': bins_per_octave = (int)atoi(optarg); break;
+      case 'f': feature = optarg; break;
+      case '?': usage(); break;
+      default:
+                usage();
+                exit(1);
+                break;
+    }
+  }
+  if (raw_pcm_filepath == NULL) {
+    log_and_exit("ERROR: must specify raw_pcm_filepath\n");
+  }
+  if (cqt_spectrogram_filepath == NULL) {
+    log_and_exit("ERROR: must specify path to output spectrogram image file\n");
+  }
+  if (cqt_data_filepath == NULL) {
+    log_and_exit("ERROR: must specify path to output cqt data file\n");
+  }
+  if (sample_rate <= 0) {
+    log_and_exit("ERROR: must specify sample rate of the PCM file\n");
+  }
+  if (min_freq < 0) {
+    log_and_exit("ERROR: must specify correct min_freq\n");
+  }
+  if (max_freq < 0) {
+    log_and_exit("ERROR: must specify correct max_freq\n");
+  }
+  if (bins_per_octave <= 0 || (bins_per_octave % 12) != 0) {
+    log_and_exit("ERROR: bins_per_octave must be multiples of 12\n");
+  }
 }
 
 int main(int argc, const char *argv[]) {
-  //const char *raw_pcm_file = "/Users/neevek/Desktop/audioprocessing/note_scale/acou/23,24-acoustic-guitar.wav";
-  //const char *raw_pcm_file = "/Users/neevek/Desktop/audioprocessing/note_scale/acou/30-acou.raw";
+  process_args(argc, (char **)argv);
 
-  //do_cqt(
-      //"input/a.raw",
-      //"out/a.png",
-      //"out/a.txt",
-      //"24"
-      //);
   do_cqt(
-      "/Users/neevek/Desktop/audioprocessing/input/Dataset_for_MIREX/WavfileRaw/abjones_5_09.raw",
-      "/Users/neevek/Desktop/audioprocessing/input/Dataset_for_MIREX/WavfileCqtSpectrogram/abjones_5_09.png",
-      "/Users/neevek/Desktop/audioprocessing/input/Dataset_for_MIREX/WavfileCqtData/abjones_5_09.txt",
-      "24"
+      raw_pcm_filepath,
+      cqt_spectrogram_filepath,
+      cqt_data_filepath,
+      sample_rate,
+      overlap,
+      min_freq,
+      max_freq,
+      bins_per_octave,
+      is_stereo,
+      use_channels,
+      feature
       );
-  //do_cqt(
-      //"input/28-acoustic-guitar.raw",
-      //"out/28-acoustic-guitar.png",
-      //"out/28-acoustic-guitar.txt",
-      //"28"
-      //);
-  //do_cqt(
-      //"input/29-acoustic-guitar.raw",
-      //"out/29-acoustic-guitar.png",
-      //"out/29-acoustic-guitar.txt",
-      //"29"
-      //);
-  //do_cqt(
-      //"input/31-acoustic-guitar.raw",
-      //"out/31-acoustic-guitar.png",
-      //"out/31-acoustic-guitar.txt",
-      //"31"
-      //);
-  //do_cqt(
-      //"input/33-acoustic-guitar.raw",
-      //"out/33-acoustic-guitar.png",
-      //"out/33-acoustic-guitar.txt",
-      //"33"
-      //);
 
   return 0;
 }

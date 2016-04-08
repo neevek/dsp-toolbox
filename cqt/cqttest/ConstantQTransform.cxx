@@ -49,14 +49,6 @@ ConstantQTransform::ConstantQTransform(unsigned iFS, double ifmin, double ifmax,
 	Q = 1/(std::pow(2.,(1/(double)_binsPerOctave))-1);	// Work out Q value for filter bank
 	K = (int) ceil(_binsPerOctave * std::log(fmax/fmin)/std::log(2.0));	// No. of constant Q bins
 
-  int octaves = int(ceil(log(fmax / fmin) / log(2)));
-  double tmp_min_freq = (fmax / 2) * pow(2, 1.0/binsPerOctave);
-  double real_min_freq = tmp_min_freq / pow(2.0, octaves - 1);
-  std::cerr << "=========================" << std::endl;
-  std::cerr << "     octaves: " << octaves << std::endl;
-  std::cerr << "real minfreq: " << real_min_freq << std::endl;
-  std::cerr << "=========================" << std::endl;
-
 	// work out length of fft required for this constant Q filter bank
 	mSpectrumSize = (int) std::pow(2., nextpow2(ceil(Q*FS/fmin)));
 
@@ -66,6 +58,16 @@ ConstantQTransform::ConstantQTransform(unsigned iFS, double ifmin, double ifmax,
 
 ConstantQTransform::~ConstantQTransform()
 {
+}
+
+int ConstantQTransform::getOctaves() const {
+  return int(ceil(log(fmax / fmin) / log(2)));
+}
+
+double ConstantQTransform::getEstimatedMinFreq() const {
+  double tmp_min_freq = (fmax / 2) * pow(2, 1.0/_binsPerOctave);
+  double real_min_freq = tmp_min_freq / pow(2.0, getOctaves() - 1);
+  return real_min_freq;
 }
 
 void ConstantQTransform::sparsekernel(double thresh)

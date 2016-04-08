@@ -87,6 +87,8 @@ public:
 	const ConstantQSpectrum & constantQSpectrum() const {return cqdata;}
 	double getQ() const {return Q;}
 	int getK() const {return K;}
+	int getOctaves() const;
+	double getEstimatedMinFreq() const;
 	int getfftlength() const {return mSpectrumSize;}
 private:
 	double Hamming(int len, int n) {
