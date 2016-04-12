@@ -85,9 +85,9 @@ class PNGImage {
 };
 
 static void val2rgb2(float level, png_byte *rgb) {
-  rgb[0] = level * 255;
-  rgb[1] = level * 255;
-  rgb[2] = level * 255;
+  rgb[0] = rgb[1] = rgb[2] = 255 - fmin(level * 255, 255);
+  //rgb[1] = fmin(level * 255, 255);
+  //rgb[2] = fmin(level * 255, 255);
 } 
 
 // http://en.wikipedia.org/wiki/Window_function
@@ -202,22 +202,35 @@ static void do_cqt(const char *raw_pcm_filepath,
     png_bytep row = new png_byte[3 * width];
     PNGImage png_image(cqt_spectrogram_filepath, width, height, nullptr);
 
-    double nmax = 0;
-    double nmin = 0;
-    double nrange = 0;
-    for (auto &col : cqt_data) {
-      for (double d : col) {
-        nmax = std::max(d, nmax);
-        nmin = std::min(d, nmin);
-      }
-    }
-    nrange = nmax - nmin;
+    //double nmax = 0;
+    //double nmin = 0;
+    //double nrange = 0;
+    //for (auto &col : cqt_data) {
+      //for (double d : col) {
+        //nmax = std::max(d, nmax);
+        //nmin = std::min(d, nmin);
+      //}
+    //}
+    //nrange = nmax - nmin;
 
     for (auto &col : cqt_data) {
       fprintf(fdata, "%s", feature);
 
+      double nsum = 0;
+      double nmax = 0;
+      double nmin = 0;
+      double nrange = 0;
+      for (double d : col) {
+        nmax = std::max(d, nmax);
+        nmin = std::min(d, nmin);
+        nsum += d;
+      }
+      nrange = nmax - nmin;
+
       for (int i = 0, j = 0; i < col.size(); ++i, ++j) {
-        float level = (col[i] - nmin)/nrange;
+        //float level = (col[i] - nmin)/nrange;
+        //float level = pow(col[i] / nsum * 100, 2) / 100.f;
+        float level = nsum == 0 ? 0 : col[i] / nsum;
         val2rgb2(level, row+(j*3) );
 
         fprintf(fdata, ",%f", level);
