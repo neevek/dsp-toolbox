@@ -93,16 +93,67 @@ static void val2rgb2(float level, png_byte *rgb) {
 
 // http://en.wikipedia.org/wiki/Window_function
 float hanning_window(int n, int N) {
+  return 0.5f * (1-cos(2*M_PI*n/(N-1)));
+}
+float hamming_window(int n, int N) {
   return 0.54f - 0.46f * (float)cos((2 * M_PI * n) / (N - 1));
 }
-float nutall_window(int n, int N) {
+float nuttall_window(int n, int N) {
   return 0.355768 - 0.487396 * cos(2*M_PI*n/(N-1)) + 0.144232 * cos(4*M_PI*n/(N-1)) - 0.012604 * cos(6*M_PI*n/(N-1));
 }
 float blackman_window(int n, int N) {
   return 0.42659 - 0.49656 * cos(2*M_PI*n/(N-1)) + 0.076849 * cos(4*M_PI*n/(N-1));
 }
-float no_window(int n, int N) {
+
+float gaussian(float x, int N) {
+  return pow(M_E, -pow((x-(N-1)/2)/(2*0.1f*N), 2));
+}
+float approximate_confined_gaussian_window(int n, int N) {
+  return gaussian(n, N) - (gaussian(-0.5f, N)*(gaussian(n+N,N)+gaussian(n-N,N)))/
+    (gaussian(-0.5f+N,N)+gaussian(-0.5f-N,N));
+}
+
+float gaussian_window(float n, int N) {
+  return pow(M_E, -0.5f*pow((n-(N-1)/2)/(0.5f*(N-1)/2), 2));
+}
+
+float hann_poisson_window(float n, int N) {
+  return 0.5f*(1-cos(2*M_PI*n)/(N-1))*pow(M_E, (-2*std::abs(N-1-2*n))/(N-1));
+}
+
+float rectangular_window(int n, int N) {
   return 1.f;
+}
+
+struct winfun_t {
+  const char *winfun_name;
+  std::function<float(int,int)> winfun;
+};
+
+static struct winfun_t winfun_array[] = {
+  {"rectangular", rectangular_window},
+  {"hanning", hanning_window},
+  {"hamming", hamming_window},
+  {"nuttall", nuttall_window},
+  {"blackman", blackman_window},
+  {"approximate confined gaussian", approximate_confined_gaussian_window},
+  {"gaussian", gaussian_window},
+  {"hann poisson", hann_poisson_window},
+};
+
+static std::string winfuns_to_string() {
+  int size = sizeof(winfun_array)/sizeof(winfun_array[0]);
+
+  std::string s;
+  for (int i = 0; i < size; ++i) {
+    s.append("\t   ");
+    s.append(std::to_string(i));
+    s.append(": ");
+    s.append(winfun_array[i].winfun_name);
+    s.append("\n");
+  }
+
+  return s;
 }
 
 static void do_cqt(const char *raw_pcm_filepath,
@@ -116,33 +167,14 @@ static void do_cqt(const char *raw_pcm_filepath,
                    unsigned int bins_per_octave,
                    bool is_stereo,
                    int use_channels,  // 0=both, 1=left, 2=right
-                   const char *feature) {
+                   const char *feature,
+                   bool normalize_cqt_data
+                   ) {
 
-  printf("\n");
-  printf("================== debug info ==================\n");
-  printf(" pcm input file: %s\n", raw_pcm_filepath);
-  printf("cqt spectr file: %s\n", cqt_spectrogram_filepath);
-  printf("  cqt data file: %s\n", cqt_data_filepath);
-  printf("    sample rate: %d\n", sample_rate);
-  printf("        overlap: %.4f\n", overlap);
-  printf("window function: %d\n", winfun_type);
-  printf("  min frequency: %.4lf\n", min_freq);
-  printf("  max frequency: %.4lf\n", max_freq);
-  printf("bins per octave: %d\n", bins_per_octave);
-  printf("      is stereo: %d\n", is_stereo);
-  printf("   use channels: %d (0=both, 1=left, 2=right)\n", use_channels);
-  printf("        feature: %s\n", feature);
+  struct winfun_t &selected_winfun = winfun_array[winfun_type];
 
-  using window_function = std::function<float(int,int)>;
-  window_function wndfun;
-  if (winfun_type == 1) {
-    wndfun = hanning_window;
-  } else if (winfun_type == 2) {
-    wndfun = nutall_window;
-  } else if (winfun_type == 3) {
-    wndfun = blackman_window;
-  } else {
-    wndfun = no_window;
+  if (winfun_type == 0) {
+    overlap = 0;  // if no window function is selected, overlap will be ignored
   }
 
   double sparse_cqt_kernel_threshold = 0.0054;
@@ -152,8 +184,24 @@ static void do_cqt(const char *raw_pcm_filepath,
   FourierTransform fft(frame_size, 1, 0);
   cqt.sparsekernel(sparse_cqt_kernel_threshold);
 
+  printf("\n");
+  printf("================== debug info ==================\n");
+  printf(" pcm input file: %s\n", raw_pcm_filepath);
+  printf("cqt spectr file: %s\n", cqt_spectrogram_filepath);
+  printf("  cqt data file: %s\n", cqt_data_filepath);
+  printf("    sample rate: %d\n", sample_rate);
+  printf("        overlap: %.4f\n", overlap);
+  printf("window function: %s\n", selected_winfun.winfun_name);
+  printf("  min frequency: %.4lf\n", min_freq);
+  printf("  max frequency: %.4lf\n", max_freq);
+  printf("bins per octave: %d\n", bins_per_octave);
+  printf("      is stereo: %d\n", is_stereo);
+  printf("   use channels: %d (0=both, 1=left, 2=right)\n", use_channels);
+  printf("        feature: %s\n", feature);
   printf("        octaves: %d\n", cqt.getOctaves());
   printf("  est. min freq: %.4lf\n", cqt.getEstimatedMinFreq());
+  printf("     frame size: %d\n", frame_size);
+  printf(" cqt normalized: %d\n", normalize_cqt_data);
 
   FILE *file = fopen(raw_pcm_filepath, "rb");
   short inbuf[frame_size * 2];
@@ -170,9 +218,9 @@ static void do_cqt(const char *raw_pcm_filepath,
       for (int i = 0; i < frame_size; ++i) {
         //frame_data[i] = inbuf[i * 2] + inbuf[i * 2 + 1];
         // use right channel only in this case
-        //printf("i=%d, window: %f\n", i, hanning_window(i, frame_size));
+        //printf("i=%d, window: %f\n", i, hamming_window(i, frame_size));
 
-        float window = wndfun(i, frame_size);
+        float window = selected_winfun.winfun(i, frame_size);
         if (use_channels == 1) {
           frame_data[i] = inbuf[i * 2] * window;
         } else if (use_channels == 2) {
@@ -194,7 +242,7 @@ static void do_cqt(const char *raw_pcm_filepath,
       }
 
       for (int i = 0; i < frame_size; ++i) {
-        float window = wndfun(i, frame_size);
+        float window = selected_winfun.winfun(i, frame_size);
         frame_data[i] = inbuf[i] * window;
       }
 
@@ -264,7 +312,7 @@ static void do_cqt(const char *raw_pcm_filepath,
         float level = nsum == 0 ? 0 : col[i] / nsum;
         val2rgb2(level, row+(j*3) );
 
-        fprintf(fdata, ",%f", level);
+        fprintf(fdata, ",%f", normalize_cqt_data ? level : col[i]);
       }
 
       fprintf(fdata, "\n");
@@ -292,10 +340,11 @@ static int use_channels = 0; // 0=both, 1=left, 2=right
 static unsigned int sample_rate = 0;
 static float overlap = 0.5f;
 static int winfun_type = 0; // default=hanning
-static double min_freq = 246.94f; //61.735f;
+static double min_freq = 123.47f; // 246.94f; //61.735f;
 static double max_freq = 4186.0f;
 static unsigned int bins_per_octave = 36;
 static char *feature = nullptr;
+static bool normalize_cqt_data = true;
 
 static void usage() {
   fprintf(stderr, "\nUsage:\n"
@@ -306,15 +355,18 @@ static void usage() {
       "\t-u use which channels, default=%d (0=both, 1=left, 2=right)\n"
       "\t-s sample rate of the raw PCM file, default=%d\n"
       "\t-o overlap, default=%.4f\n"
-      "\t-w window function, default=0 (0=Don'tUseWinFun, 1=hann, 2=nutall, 3=blackman)\n"
+      "\t-w window function, one of the following (default=0): \n"
+      "%s"
       "\t-m min frequency, default=%.4lf\n"
       "\t-n max frequency, default=%.4lf\n"
       "\t-b bins per octave, default=%d\n"
       "\t-f feature flag\n"
+      "\t-x normalize cqt data (default=1)\n"
       "\t-h print this help\n\n",
       use_channels,
       sample_rate,
       overlap,
+      winfuns_to_string().c_str(),
       min_freq,
       max_freq,
       bins_per_octave
@@ -329,7 +381,7 @@ static void log_and_exit(const char *msg) {
 
 static void process_args(int argc, char **argv) {
   while (1) {
-    int c = getopt(argc, argv, "i:p:d:c:u:s:o:w:m:n:b:f:h");
+    int c = getopt(argc, argv, "i:p:d:c:u:s:o:w:m:n:b:f:x:h");
     if (c == -1) {
       break;
     }
@@ -347,6 +399,7 @@ static void process_args(int argc, char **argv) {
       case 'n': max_freq = (double)atof(optarg); break;
       case 'b': bins_per_octave = (int)atoi(optarg); break;
       case 'f': feature = optarg; break;
+      case 'x': normalize_cqt_data = (int)atoi(optarg); break;
       case '?': usage(); break;
       default:
                 usage();
@@ -375,6 +428,11 @@ static void process_args(int argc, char **argv) {
   if (bins_per_octave <= 0 || (bins_per_octave % 12) != 0) {
     log_and_exit("ERROR: bins_per_octave must be multiples of 12\n");
   }
+
+  int size = sizeof(winfun_array)/sizeof(winfun_array[0]);
+  if (winfun_type < 0 || winfun_type >= size) {
+    log_and_exit("ERROR: window function not found\n");
+  }
 }
 
 int main(int argc, const char *argv[]) {
@@ -392,7 +450,8 @@ int main(int argc, const char *argv[]) {
       bins_per_octave,
       is_stereo,
       use_channels,
-      feature
+      feature,
+      normalize_cqt_data
       );
 
   return 0;
