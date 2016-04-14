@@ -3,3 +3,5 @@
 *.png
 input/
 output/
+out/
+cqt/cqtgen
