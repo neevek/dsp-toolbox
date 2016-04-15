@@ -4,4 +4,6 @@
 input/
 output/
 out/
-cqt/cqtgen
+*.o
+fftgen
+cqtgen
