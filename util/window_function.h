@@ -30,12 +30,12 @@ float approximate_confined_gaussian_window(int n, int N) {
     (gaussian(-0.5f+N,N)+gaussian(-0.5f-N,N));
 }
 
-float gaussian_window(float n, int N) {
+float gaussian_window(int n, int N) {
   return pow(M_E, -0.5f*pow((n-(N-1)/2)/(0.5f*(N-1)/2), 2));
 }
 
-float hann_poisson_window(float n, int N) {
-  return 0.5f*(1-cos(2*M_PI*n)/(N-1))*pow(M_E, (-2*std::abs(N-1-2*n))/(N-1));
+float hann_poisson_window(int n, int N) {
+  return 0.5f*(1-cos(2*M_PI*n)/(N-1))*pow(M_E, (-2*abs(N-1-2*n))/(N-1));
 }
 
 float rectangular_window(int n, int N) {
