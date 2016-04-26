@@ -20,7 +20,7 @@ struct gen_fft_cfg {
   bool is_stereo = false;
   int use_channels = 0; // 0=both, 1=left, 2=right
   unsigned int sample_rate = 0;
-  int herz_per_bin = 5;
+  float herz_per_bin = 5;
   int reserved_freq_bin = 200;
   float overlap = 0.5f;
   int winfun_type = 0; // default=hanning
@@ -94,7 +94,10 @@ static void write_spectrogram_and_fft_data(
 }
 
 static void do_fft(gen_fft_cfg cfg) {
-  int nfft = cfg.sample_rate / cfg.herz_per_bin;
+  int nfft = (int)(cfg.sample_rate / cfg.herz_per_bin);
+  if (nfft & 1) {
+    nfft += 1;
+  }
   int nfreqs = nfft/2 + 1;
   int restricted_nfreqs = fmin(nfreqs, cfg.reserved_freq_bin);
 
@@ -102,6 +105,7 @@ static void do_fft(gen_fft_cfg cfg) {
 
   kiss_fftr_cfg fft_cfg = kiss_fftr_alloc(nfft, 0, 0, 0);
   kiss_fft_scalar *fft_input = (kiss_fft_scalar *)malloc(sizeof(kiss_fft_scalar) * nfft);
+  memset(fft_input, 0, sizeof(kiss_fft_scalar));
   kiss_fft_cpx *fft_output = (kiss_fft_cpx *)malloc(sizeof(kiss_fft_cpx) * nfreqs);
   short *inbuf = (short *)malloc(sizeof(short) * nfft * 2); // for stereo
 
@@ -118,7 +122,7 @@ static void do_fft(gen_fft_cfg cfg) {
   fprintf(stderr, "      is stereo: %d\n", cfg.is_stereo);
   fprintf(stderr, "   use channels: %d (0=both, 1=left, 2=right)\n", cfg.use_channels);
   fprintf(stderr, "        feature: %s\n", cfg.feature.c_str());
-  fprintf(stderr, "     Hz per bin: %d\n", cfg.herz_per_bin);
+  fprintf(stderr, "     Hz per bin: %f\n", cfg.herz_per_bin);
   fprintf(stderr, "  reserved bins: %d\n", cfg.reserved_freq_bin);
   fprintf(stderr, "     frame size: %d\n", cfg.frame_size);
   fprintf(stderr, " fft normalized: %d\n", cfg.normalize_fft_data);
@@ -147,7 +151,7 @@ static void do_fft(gen_fft_cfg cfg) {
         }
       }
 
-      long overlap_size = (long)(cfg.frame_size * sizeof(short) * 2 * cfg.overlap);
+      long overlap_size = (long)(cfg.frame_size / (arz?2:1) * sizeof(short) * 2 * cfg.overlap);
       if (overlap_size % 2 != 0) {
         --overlap_size;
       }
@@ -163,19 +167,23 @@ static void do_fft(gen_fft_cfg cfg) {
         fft_input[i] = inbuf[i] * window;
       }
 
-      long overlap_size = (long)(cfg.frame_size * sizeof(short) * cfg.overlap);
+      long overlap_size = (long)(cfg.frame_size / (arz?2:1) * sizeof(short) * cfg.overlap);
       if (overlap_size % 2 != 0) {
         --overlap_size;
       }
       fseek(file, -overlap_size, SEEK_CUR);
     }
 
-    if (arz) {
-      for (int i = cfg.frame_size/2-1, j = cfg.frame_size-1; i > 0; --i, j-=2) {
-        fft_input[j] = 0;
-        fft_input[j-1] = fft_input[i];
-      }
-    }
+    //if (arz) {
+      //for (int i = cfg.frame_size/2-1, j = cfg.frame_size-1; i > 0; --i, j-=2) {
+        //fft_input[j] = 0;
+        //fft_input[j-1] = fft_input[i];
+      //}
+      //for (int i = 0; i < cfg.frame_size; i+=2) {
+        //printf("(%f, %f) ", fft_input[i], fft_input[i+1]);
+      //}
+      //printf("\n");
+    //}
 
     /*if (remove_dc) {*/
     /*float avg = 0;*/
@@ -217,7 +225,7 @@ static void usage(const gen_fft_cfg &cfg) {
       "\t-o overlap, default=%.4f\n"
       "\t-w window function, one of the following (default=0): \n"
       "%s"
-      "\t-m Hz per bin, default=%d\n"
+      "\t-m Hz per bin, default=%f\n"
       "\t-n reserved bins, default=%d\n"
       "\t-f feature flag\n"
       "\t-x normalize fft data (default=1)\n"
@@ -256,7 +264,7 @@ static gen_fft_cfg process_args(int argc, char **argv) {
       case 's': cfg.sample_rate = (unsigned int)atoi(optarg); break;
       case 'o': cfg.overlap = (float )atof(optarg); break;
       case 'w': cfg.winfun_type = atoi(optarg); break;
-      case 'm': cfg.herz_per_bin= (double)atof(optarg); break;
+      case 'm': cfg.herz_per_bin= (float)atof(optarg); break;
       case 'n': cfg.reserved_freq_bin= (double)atof(optarg); break;
       case 'f': cfg.feature = optarg; break;
       case 'x': cfg.normalize_fft_data = (int)atoi(optarg); break;
