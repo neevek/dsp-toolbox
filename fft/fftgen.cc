@@ -26,6 +26,7 @@ struct gen_fft_cfg {
   int winfun_type = 0; // default=hanning
   std::string feature;
   bool normalize_fft_data = true;
+  bool add_redundancy_zero = false;
 
   unsigned int frame_size;
 };
@@ -120,15 +121,18 @@ static void do_fft(gen_fft_cfg cfg) {
   fprintf(stderr, "     Hz per bin: %d\n", cfg.herz_per_bin);
   fprintf(stderr, "  reserved bins: %d\n", cfg.reserved_freq_bin);
   fprintf(stderr, "     frame size: %d\n", cfg.frame_size);
-  fprintf(stderr," fft normalized: %d\n", cfg.normalize_fft_data);
+  fprintf(stderr, " fft normalized: %d\n", cfg.normalize_fft_data);
+  fprintf(stderr, "       add zero: %d\n", cfg.add_redundancy_zero);
 
   FILE *file = fopen(cfg.raw_pcm_filepath.c_str(), "rb");
+
+  int arz = cfg.add_redundancy_zero;
 
   std::vector<std::vector<float>> fft_data;
   while (1) {
     if (cfg.is_stereo) {
-      int n = fread(inbuf, sizeof(short) * 2, cfg.frame_size, file);
-      if (n != cfg.frame_size) {
+      int n = fread(inbuf, sizeof(short) * 2, cfg.frame_size / (arz ? 2 : 1), file);
+      if ((!arz && n != cfg.frame_size) || (arz && n != cfg.frame_size/2)) {
         break;
       }
 
@@ -149,8 +153,8 @@ static void do_fft(gen_fft_cfg cfg) {
       }
       fseek(file, -overlap_size, SEEK_CUR);
     } else {
-      int n = fread(inbuf, sizeof(short), cfg.frame_size, file);
-      if (n != cfg.frame_size) {
+      int n = fread(inbuf, sizeof(short), cfg.frame_size / (arz ? 2 : 1), file);
+      if ((!arz && n != cfg.frame_size) || (arz && n != cfg.frame_size/2)) {
         break;
       }
 
@@ -164,6 +168,13 @@ static void do_fft(gen_fft_cfg cfg) {
         --overlap_size;
       }
       fseek(file, -overlap_size, SEEK_CUR);
+    }
+
+    if (arz) {
+      for (int i = cfg.frame_size/2-1, j = cfg.frame_size-1; i > 0; --i, j-=2) {
+        fft_input[j] = 0;
+        fft_input[j-1] = fft_input[i];
+      }
     }
 
     /*if (remove_dc) {*/
@@ -210,6 +221,7 @@ static void usage(const gen_fft_cfg &cfg) {
       "\t-n reserved bins, default=%d\n"
       "\t-f feature flag\n"
       "\t-x normalize fft data (default=1)\n"
+      "\t-z add redundancy zero (default=0)\n"
       "\t-h print this help\n\n",
       cfg.use_channels,
       cfg.sample_rate,
@@ -230,7 +242,7 @@ static gen_fft_cfg process_args(int argc, char **argv) {
   gen_fft_cfg cfg;
 
   while (1) {
-    int c = getopt(argc, argv, "i:p:d:c:u:s:o:w:m:n:f:x:h");
+    int c = getopt(argc, argv, "i:p:d:c:u:s:o:w:m:n:f:x:z:h");
     if (c == -1) {
       break;
     }
@@ -248,6 +260,7 @@ static gen_fft_cfg process_args(int argc, char **argv) {
       case 'n': cfg.reserved_freq_bin= (double)atof(optarg); break;
       case 'f': cfg.feature = optarg; break;
       case 'x': cfg.normalize_fft_data = (int)atoi(optarg); break;
+      case 'z': cfg.add_redundancy_zero = (int)atoi(optarg); break;
       case '?': usage(cfg); break;
       default:
                 usage(cfg);
