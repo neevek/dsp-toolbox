@@ -27,6 +27,7 @@ struct gen_fft_cfg {
   std::string feature;
   bool normalize_fft_data = true;
   bool add_redundancy_zero = false;
+  bool enable_fwc = false; // Full wave converter
 
   unsigned int frame_size;
 };
@@ -127,6 +128,7 @@ static void do_fft(gen_fft_cfg cfg) {
   fprintf(stderr, "     frame size: %d\n", cfg.frame_size);
   fprintf(stderr, " fft normalized: %d\n", cfg.normalize_fft_data);
   fprintf(stderr, "       add zero: %d\n", cfg.add_redundancy_zero);
+  fprintf(stderr, "     enable FWC: %d\n", cfg.enable_fwc);
 
   FILE *file = fopen(cfg.raw_pcm_filepath.c_str(), "rb");
 
@@ -149,6 +151,10 @@ static void do_fft(gen_fft_cfg cfg) {
         } else {
           fft_input[i] = (inbuf[i * 2] + inbuf[i * 2 + 1]) * window;
         }
+
+        if (cfg.enable_fwc) {
+          fft_input[i] = fft_input[i] < 0 ? -(fft_input[i] * fft_input[i]) : (fft_input[i] * fft_input[i]);
+        }
       }
 
       long overlap_size = (long)(cfg.frame_size / (arz?2:1) * sizeof(short) * 2 * cfg.overlap);
@@ -165,6 +171,10 @@ static void do_fft(gen_fft_cfg cfg) {
       for (int i = 0; i < cfg.frame_size; ++i) {
         float window = selected_winfun.winfun(i, cfg.frame_size);
         fft_input[i] = inbuf[i] * window;
+
+        if (cfg.enable_fwc) {
+          fft_input[i] = fft_input[i] < 0 ? -(fft_input[i] * fft_input[i]) : (fft_input[i] * fft_input[i]);
+        }
       }
 
       long overlap_size = (long)(cfg.frame_size / (arz?2:1) * sizeof(short) * cfg.overlap);
@@ -230,6 +240,7 @@ static void usage(const gen_fft_cfg &cfg) {
       "\t-f feature flag\n"
       "\t-x normalize fft data (default=1)\n"
       "\t-z add redundancy zero (default=0)\n"
+      "\t-l enable FWC(full wave converter) (default=0)\n"
       "\t-h print this help\n\n",
       cfg.use_channels,
       cfg.sample_rate,
@@ -250,7 +261,7 @@ static gen_fft_cfg process_args(int argc, char **argv) {
   gen_fft_cfg cfg;
 
   while (1) {
-    int c = getopt(argc, argv, "i:p:d:c:u:s:o:w:m:n:f:x:z:h");
+    int c = getopt(argc, argv, "i:p:d:c:u:s:o:w:m:n:f:x:z:l:h");
     if (c == -1) {
       break;
     }
@@ -269,6 +280,7 @@ static gen_fft_cfg process_args(int argc, char **argv) {
       case 'f': cfg.feature = optarg; break;
       case 'x': cfg.normalize_fft_data = (int)atoi(optarg); break;
       case 'z': cfg.add_redundancy_zero = (int)atoi(optarg); break;
+      case 'l': cfg.enable_fwc = (int)atoi(optarg); break;
       case '?': usage(cfg); break;
       default:
                 usage(cfg);
